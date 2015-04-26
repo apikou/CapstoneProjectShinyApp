@@ -1,0 +1,322 @@
+  ---
+title: " Data Science Capstone Project"
+author: "Abdelkader ESSODEGUI"
+date: "Saturday, April 11, 2015"
+output: html_document
+---
+
+```{r}
+libs <- c("knitr","stringi","RWeka","tm","data.table","plyr")
+lapply(libs,require,character.only=TRUE )
+```
+
+```{r}
+opts_chunk$set(cache=TRUE,warning=FALSE)
+```
+
+* Download and unzip data :
+
+```{r,cache=TRUE}
+url <- "http://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera    -SwiftKey.zip"
+destination.file <- "Coursera-SwiftKey.zip"
+download.file(url,destination.file)
+```
+
+* Extrat files from Coursera-SwiftKey.zip :
+
+```{r}
+ unzip(destination.file)
+```
+
+* Reading  blogs and twitters files in text mode 
+* news filehas encontred some problems is read via a local connection in a binary mode. 
+
+```{r,warning=FALSE}
+    con <- file("final/en_US/en_US.news.txt",open="rb")
+    news <- readLines(con,encoding="UTF-8")  
+    close(con)
+    rm(con)
+     blogs   <- readLines("final/en_US/en_US.blogs.txt",encoding="UTF-8")
+     twitter <- readLines("final/en_US/en_US.twitter.txt",encoding="UTF-8")
+
+# Sizes
+
+     blogsSize   <- file.info("final/en_US/en_US.blogs.txt")$size/1024^2
+     newsSize    <- file.info("final/en_US/en_US.news.txt")$size/1024^2
+     twitterSize <- file.info("final/en_US/en_US.twitter.txt")$size/1024^2
+
+# Lines
+
+    blogsLines     <- length(blogs)
+    newsLines      <- length(news)
+    twitterLines   <- length(twitter)
+
+    blogsLines
+    newsLines      
+    twitterLines   
+
+
+save(blogs  ,file="blogs.RData")
+save(news   ,file="news.RData")
+save(twitter,file="twitter.RData")
+
+```
+
+* Sampling :
+* Due to the dataset size and the processing time required  files will    be sampled and combined. 
+
+```{r}
+set.seed(100)
+sample.size=50000
+blogsIndex     <- sample(c(1:length(blogs)),sample.size,replace=FALSE)
+newsIndex      <- sample(c(1:length(news)) ,sample.size,replace=FALSE)
+twitterIndex   <- sample(c(1:length(twitter)),sample.size,replace=FALSE)
+mediaSample    <- c(blogs[blogsIndex],news[newsIndex],twitter[twitterIndex])
+length(mediaSample) 
+head(mediaSample)
+tail(mediaSample)
+
+```
+
+
+* clean: cleaning function
+
+```{r}
+clean <- function(x,print=FALSE){
+  # cleans out no ASCII characters
+       x <- lapply(x,function(row) iconv(row,"latin1","ASCII",sub=""))
+  # alphabetic only keep apostrophes (')     
+       x <- gsub("[^[:alpha:][:space:]']","",x)
+  # lower case
+       x <- tolower(x)                              
+       x <- removeWords(x,stopwords("english"))
+  # remove URLs 
+  #     x <- gsub("f|ht)tp(s?)://(.*)[.][a-z]+","",x)
+  # remove twitter accounts
+       x <- gsub("@[^\\s]+","",x,perl=TRUE) 
+  # printable characters only
+       x <- gsub("[^:[:print:]]","",x)
+  # returns string w/o leading spaces
+       x <- sub("^\\s+","",x)
+   # remove characters repeted 3 or more times 
+         x <- gsub("(.)\\1{2,}","\\1\\1",x)
+  # remove 2 characters repeted 2 or more times 
+  #       x <- gsub("(..)\\1{2,}","\\1\\1",x)
+  # fix the s caracter (too many)
+          x <- gsub(" it's "," it is ",x)
+          x <- gsub(" 's "," is ",x)
+  # remove extra spaces
+       x <- stripWhitespace(x)
+ 
+       return(unlist(x))
+}
+cmediaSample <- clean(mediaSample)
+rm(mediaSample)
+#preview the sample after cleaning
+head(cmediaSample)
+tail(cmediaSample)
+str(cmediaSample)
+length(cmediaSample)
+
+```
+
+* Training and test sets.
+
+```{r}
+#cmediaSample    <- cmediaSample[1:round(length(cmediaSample)*0.90)]
+#testSet       <- cmediaSample[-trainSet]
+```
+
+
+* ngram firstWords and lastWord 
+
+```{r}
+# firstWords:this function takes a character string (an ngram name here) and
+# converts it into words and returns  the ngram first Words(1,2 or 3)
+# lastWord  : this function returns the ngram last word. 
+
+firstWords <- function(x){
+  
+     y <- unlist(strsplit(x, " "))
+     return(paste(y[1:length(y)-1], collapse=" "))
+  
+}
+
+lastWord <- function(x){
+  
+     y <- unlist(strsplit(x, " "))
+     return(y[length(y)])                
+  
+}
+```
+
+
+* Tokenization
+
+```{r}
+
+# tokenizer : function with 2 arguments text and n the ngram size and  returns a list of tokens of 1,2,3 or 4 grams depending on n value.
+ 
+tokenizer <- function(t,n) NGramTokenizer(t,Weka_control(min=n,max=n))
+
+#unigrams
+
+unigrams <- tokenizer(cmediaSample,1)
+head(unigrams)
+length(unigrams)
+
+unigramTable  <- as.data.table(table(unigrams))[N >= 4,]
+uniqueWords <- unigramTable$unigrams
+save(uniqueWords, file="uniqueWords.rds")
+
+# unigramTable <- sort(table(unigrams), decreasing=T)
+
+# 2,3 and 4 ngrams
+
+bigrams <- tokenizer(cmediaSample,2)
+trigrams <- tokenizer(cmediaSample,3)
+quadgrams <- tokenizer(cmediaSample,4)
+
+rm(cmediaSample)
+
+```
+
+* ngram data.table()
+
+```{r}
+
+# ngramDT : A function that takes the ngrams created by the function
+# tokenize and arrange them in a desired subset way as a data table,
+# and return a table with the ngram firstWords and lastWord columns 
+# and the ngram counts variable ,with a subsetting option .
+
+ngramDT <- function(tokens,freq){
+
+     ngramTable <- data.table(tokens)
+     setnames(ngramTable, names(ngramTable)[1], "ngram")
+  
+     ngram <- data.table(unlist(lapply(ngramTable$ngram, firstWords)))
+     setnames(ngram, "V1", "firstWords")
+     ngram$lastWord <- unlist(lapply(ngramTable$ngram, lastWord))
+  
+     ngramddply <- ddply(ngram,.(firstWords,lastWord),nrow)
+  
+     return(as.data.table(ngramddply)[ V1 >= freq ] )
+
+}
+```
+ 
+* bigrams trigrams 4grams tables rbinded 
+
+```{r}
+freq=2
+bigramddply   <- ngramDT(bigrams,2 )
+head(bigramddply)
+tail(bigramddply)
+str(bigramddply)
+
+trigramddply  <- ngramDT(trigrams,2)
+head(trigramddply)
+tail(trigramddply)
+str(trigramddply)
+
+quadgramddply <- ngramDT(quadgrams,2) 
+head(quadgramddply)
+head(quadgramddply)
+str(quadgramddply)
+
+ngramsFreqTable <- rbind(bigramddply,trigramddply)
+ngramsFreqTable <- rbind(ngramsFreqTable,quadgramddply)
+save(ngramsFreqTable,file="ngramsFreqTable.rds")
+
+head(ngramsFreqTable)
+tail(ngramsFreqTable)
+str(ngramsFreqTable)
+ 
+```
+
+* No unkown words
+
+```{r}
+# remove unkown words (may add them later) this function split the
+# the inputPhrase into words and remove the unkown words. 
+noUnknownWords <- function(phraseWordS){
+     z <- c()
+     phraseWordS <- unlist(strsplit(phraseWordS," "))
+     for(i in 1:length(phraseWordS)){
+         z[i] <-  phraseWordS[i] %in% uniqueWords
+     }   
+     return(phraseWordS[z])
+}
+```
+
+* Adjust the phrase length and keep the last 3 words. 
+
+```{r}
+# I am assuming here that the phrase last word prediction will be
+# based on the  preceeding 3 words(Markov 1st,2th and 3th order),any 
+# phrase longer than 3 words willbe cut to its 3 tail words.
+
+phraseLength <-function(inputPhrase){ 
+
+     phraseLength <- length(inputPhrase)
+     if (phraseLength == 1){
+        return(inputPhrase)
+     }
+     if (phraseLength == 2){
+        return(inputPhrase)
+     }
+     if (phraseLength >= 3){
+       return(tail(inputPhrase,3))
+     }
+}
+```
+
+* Phrase ngrams: trigram-bigram-unigram (W1W2W3- W2W3-  W3)
+
+```{r}
+
+phraseNgrams <- function(thePhrase){
+    theNgrams <- c()
+    thePhraseLength <- length(thePhrase)
+    for(i in 1:thePhraseLength){
+    theNgrams <- c(theNgrams, paste(thePhrase[i:thePhraseLength],collapse=" "))
+   }
+  return(theNgrams)
+}
+```
+
+* Find the top words
+
+```{r}
+
+topWords <- function(thengrams,probTable ,n){
+      theWords <- probTable[probTable$firstWords %in% thengrams,]
+      if( nrow(theWords) == 0){
+        return("NA")
+      }      
+      aggWords <- aggregate(V1 ~ lastWord, data=theWords, sum)
+      aggWords <- aggWords[with(aggWords, order(-V1)),]
+      return(head(aggWords$lastWord, n))
+}
+```
+
+* Predict the last words
+
+```{r}
+
+lastWordsPredict <- function(inputPhrase){
+  
+    prediction <- clean(inputPhrase)
+    prediction <- noUnknownWords(prediction)
+    prediction <- phraseLength(prediction)
+    prediction <- phraseNgrams(prediction)
+    prediction <- topWords(prediction,ngramsFreqTable , 5)
+    
+  return(prediction)
+}
+
+lastWordsPredict("according to court")
+
+```
+    
